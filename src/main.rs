@@ -19,8 +19,11 @@ fn get_data() -> io::Result<Vec<u8>> {
     // may block
     match stdin().read(&mut data[..]) {
         Ok(l) =>  match l {
-                0 => Err(Error::new(ErrorKind::Other, "EoF")),
-                _ => Ok(data),
+            0 => Err(Error::new(ErrorKind::Other, "EoF")),
+            len => {
+                data.truncate(len);
+                Ok(data)
+            },
         },
         Err(error) => {
             write!(stderr(), "Error! {}\n", error);
