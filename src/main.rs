@@ -1,3 +1,5 @@
+use std::env;
+use std::process::exit;
 use std::io;
 use std::io::prelude::*;
 use std::io::{stdin, stdout, stderr};
@@ -70,6 +72,12 @@ impl Queue {
     }
 }
 
+fn usage(ev: i32, msg: &str) {
+    println!("{}", msg);
+    println!("Usage: buffer [--buf_size <buffer size> | -s <buffer size>]");
+    exit(ev);
+}
+
 fn main() {
     // The idea here is that we read bytes on one side into a buffer, and on
     // the other we write from the buffer. When the buffer has no data we don't
@@ -78,6 +86,31 @@ fn main() {
     // Since non-blocking I/O doesn't seem to be supported in rust, I guess I'll
     // have to use separate read and write threads, connected by a protected
     // buffer . . .
+    //
+    // number of (up to) 1kB entries in the buffer
+    let mut size = 8*1024;
+    // primitive arg parsing - I wanted to do it myself rather than use an
+    // extra library, for learning.
+    let args = env::args().collect::<Vec<String>>();
+    let mut i = 1;
+    while i < args.len() {
+        match &args[i][..] {
+            "--buf_size" | "-s" => {
+                i += 1;
+                match args.get(i) {
+                    Some(arg) => match arg.parse::<usize>() {
+                        Ok(s) => size = s * 1024,
+                        Err(_) => usage(1, "Unsupported argument"),
+                    },
+                    None => usage(1, "Missing argument to -s option"),
+                };
+            },
+            "-h" | "--help" => usage(0, "buffer help"),
+            arg => usage(1, "Unknown argument"),
+        }
+        i += 1;
+    }
+
     let queue = Arc::new(Mutex::new(Queue::new()));
     {
         let queue = queue.clone();
@@ -85,6 +118,29 @@ fn main() {
             loop {
                 match get_data() {
                     Ok(data) => {
+                        // a little odd to look at, but I need a way to deal
+                        // with the buffer filling up - the answer I picked
+                        // is to spin until the writing thread reduces the
+                        // size of the buffer.
+                        //
+                        // The closure mostly provides a mechanism for locking
+                        // the mutex and checking the size of the buffer - I'd
+                        // like to be able to put this stuff in separate
+                        // functions, but this will do for now.
+                        let do_spin = || {
+                            let queue = queue.lock().unwrap();
+                            if queue.data.len() >= size {
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        while do_spin() {
+                            // this should be low-impact, but there's probably
+                            // room for a tuned sleep as well, to try and match
+                            // the read and write speeds
+                            thread::yield_now();
+                        }
                         let mut queue = queue.lock().unwrap();
                         queue.data.push_back(data);
                     },
